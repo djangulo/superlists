@@ -2,7 +2,7 @@ import time
 import unittest
 import sys
 
-from django.test import LiveServerTestCase
+from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 from selenium import webdriver
 from selenium.common.exceptions import WebDriverException
 from selenium.webdriver.common.keys import Keys
@@ -10,12 +10,13 @@ from selenium.webdriver.firefox.firefox_binary import FirefoxBinary
 
 MAX_WAIT = 5
 
-class NewVisitorTest(LiveServerTestCase):
+class NewVisitorTest(StaticLiveServerTestCase):
 
     def setUp(self):
         self.launch_browser_instance()
 
     def tearDown(self):
+        self.browser.refresh()
         self.browser.quit()
 
     def launch_browser_instance(self):
