@@ -25,4 +25,9 @@ urlpatterns = [
         views.view_list,
         name='view_list'
     ),
+    url(
+        r'^lists/(?P<list_id>\d+)/add_item$',
+        views.add_item,
+        name='add_item'
+    ),
 ]
