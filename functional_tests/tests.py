@@ -1,6 +1,7 @@
+import os
+import sys
 import time
 import unittest
-import sys
 
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 from selenium import webdriver
@@ -25,6 +26,9 @@ class NewVisitorTest(StaticLiveServerTestCase):
             self.browser = webdriver.Firefox(firefox_binary=binary)
         else:
             self.browser = webdriver.Firefox()
+        staging_server = os.environ.get('STAGING_SERVER')
+        if staging_server:
+            self.live_server_url = 'http://' + staging_server
 
     def wait_for_row_in_list_table(self, row_text):
         start_time = time.time()
