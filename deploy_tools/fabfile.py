@@ -1,5 +1,5 @@
 from fabric.contrib.files import append, exists, sed
-from fabric.api import env, local, run
+from fabric.api import env, local, run, sudo, put
 import random
 
 REPO_URL = 'https://github.com/djangulo/superlists.git'
@@ -13,6 +13,13 @@ def deploy():
     _update_virtualenv(source_folder)
     _update_static_files(source_folder)
     _update_database(source_folder)
+
+def _install_necessary_packages():
+    sudo(
+        'add-apt-repository -y ppa:fkrull/deadsnakes'
+        ' && apt-get -y update'
+        ' && apt-get install -y nginx git python3.6 python3.6-venv'
+    )
 
 def _create_directory_structure_if_necessary(site_folder):
     for subfolder in ('database', 'static', 'virtualenv', 'source'):
@@ -58,3 +65,91 @@ def _update_database(source_folder):
         f'cd {source_folder}'
         ' && ../virtualenv/bin/python manage.py migrate --noinput'
     )
+
+def _letsencrypt_get_cert(site_name, user_email=None, *args, **kwargs):
+    sudo(
+        f'git clone https://github.com/certbot/certbot /opt/letsencrypt'
+        ' && mkdir -p /var/www/letsencrypt'
+        ' && chgrp www-data /var/www/letsencrypt'
+    )
+    if user_email is not None:
+        email_command = f' && sed s/USEREMAIL/{user_email}/g'
+        email_command += f' /etc/letsencrypt/configs/{site_name}.conf'
+        email_command += f' | tee /etc/letsencrypt/configs/{site_name}.conf'
+    else:
+        email_command = ''
+
+    if exists(f'/etc/letsencrypt/configs/{site_name}.conf') == False:
+        sudo('mkdir -p /etc/letsencrypt/configs')
+        put('letsencrypt-domain.template.conf', f'/home/{env.user}/{site_name}.conf')
+        sudo(
+            f'mv /home/{env.user}/{site_name}.conf'
+            ' /etc/letsencrypt/configs/{site_name}.conf'
+            ' && sed s/SITENAME/{site_name}/g'
+            ' /etc/letsencrypt/configs/{site_name}.conf'
+            ' | tee /etc/letsencrypt/configs/{site_name}.conf' + email_command
+        )
+    if exists(f'/etc/nginx/sites-available/{site_name}.nginx.conf'):
+        sudo(
+            f'sed s/#--LETSENCRYPT_PLACEHOLDER--#/'
+            '    location /.well-known/acme-challenge {\n'
+            '        root /var/www/letsencrypt;\n'
+            '    }/g'
+            ' /etc/nginx/sites-available/{site_name}.nginx.conf'
+            ' | tee /etc/nginx/sites-available/{site_name}.nginx.conf'
+            ' && nginx -t && nginx -s reload'
+        )
+    else:
+        put('nginx.template.conf', '/home/{env.user}/{site_name}.nginx.conf')
+        sudo(
+            f'mv /home/{env.user}/nginx.template.conf'
+            ' /etc/nginx/sites-available/{site_name}.nginx.conf'
+            ' && sed s/SITENAME/{site_name}/g'
+            ' /etc/nginx/sites-available/{site_name}.nginx.conf'
+            ' | tee /etc/nginx/sites-available/{site_name}.nginx.conf'
+            ' && sed s/USERNAME/{env.user}/g'
+            ' /etc/nginx/sites-available/{site_name}.nginx.conf'
+            ' | tee /etc/nginx/sites-available/{site_name}.nginx.conf'
+            " && sed 's:#--LETSENCRYPT_PLACEHOLDER--#:"
+            "    location /.well-known/acme-challenge {\n"
+            "        root /var/www/letsencrypt;\n"
+            "    }:g' /etc/nginx/sites-available/{site_name}.nginx.conf"
+            ' | tee /etc/nginx/sites-available/{site_name}.nginx.conf'
+            ' && ln -s /etc/nginx/sites-available/{site_name}.nginx.conf'
+            ' /etc/nginx/sites-enabled/'
+            ' && nginx -t && nginx -s reload'
+        )
+    run(
+        'cd /opt/letsencrypt'
+        ' && ./certbot-auto --non-interactive --config'
+        ' /etc/letsencrypt/configs/{site_name}.conf certonly'
+    )
+
+def _letsencrypt_configure_nginx(site_name):
+    sudo(
+        f'mkdir -p /etc/ssl/certs/'
+        ' && openssl dhparam -out /etc/ssl/certs/dhparam.pem 2048'
+        ' && echo "ssl_certificate /etc/letsencrypt/live/{site_name}/fullchain.pem;"'
+        ' | tee /etc/nginx/snippets/ssl-{site_name}.conf'
+        ' && echo "ssl_certificate_key /etc/letsencrypt/live/{site_name}/privkey.pem;"'
+        ' | tee -a /etc/nginx/snippets/ssl-{site_name}.conf'
+    )
+    put('ssl-params-secure.conf', '/home/{env.user}/ssl-params.conf')
+    sudo(
+        'mv /home/{env.user}/ssl-params.conf /etc/nginx/snippets/ssl-params.conf'
+        " && sed '*server_name*a\"
+        "    return 301 https://$server_name$request_uri;'"
+        ' /etc/nginx/sites-available/{site_name}.nginx.conf'
+    )
+
+
+
+# Need to automate:
+#  - lock down ssh
+#  - secure firewall
+#  - install fail2ban
+#    = configure fail2ban to work with nginx
+
+
+
+    
