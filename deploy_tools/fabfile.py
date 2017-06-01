@@ -75,14 +75,26 @@ def _prepare_basic_nginx_file():
 
 def _configure_nginx(site_name, setup_media=False, setup_static=False,
     ssl_redirect=False):
+    if not exists(f'/etc/nginx/sites-available/{site_name}.nginx.conf'):
+        put('nginx.template.conf', f'/home/{env.user}/{site_name}.nginx.conf')
+        sudo(
+            f'mv /home/{env.user}/{site_name}.nginx.conf'
+            f' /etc/nginx/sites-available/{site_name}.nginx.conf'
+            f' && sed -i s/SITENAME/{site_name}/g'
+            f' /etc/nginx/sites-available/{site_name}.nginx.conf'
+            f' && sed -i s/USERNAME/{env.user}/g'
+            f' /etc/nginx/sites-available/{site_name}.nginx.conf'
+            f' && ln -s /etc/nginx/sites-available/{site_name}.nginx.conf'
+            ' /etc/nginx/sites-enabled/'
+            ' && nginx -t && nginx -s reload'
+        )
     if ssl_redirect:
-        if exists(f'/etc/nginx/sites-available/{site_name}.nginx.conf'):
-            sudo(
-                'mv /home/{env.user}/ssl-params.conf /etc/nginx/snippets/ssl-params.conf'
-                """&& sed '/server_name/a\"
-                    return 301 https://$server_name$request_uri;\n'"""
-                ' /etc/nginx/sites-available/{site_name}.nginx.conf'
-            )
+        sudo(
+            'mv /home/{env.user}/ssl-params.conf /etc/nginx/snippets/ssl-params.conf'
+            "&& sed "
+            f"'/charset utf-8/i\    return 301 https://$server_name$request_uri;\n'"
+            ' /etc/nginx/sites-available/{site_name}.nginx.conf'
+        )
         else:
             put('nginx.template.conf', '/home/{env.user}/{site_name}.nginx.conf')
             sudo(
@@ -123,7 +135,7 @@ def _letsencrypt_get_cert(site_name, user_email=None, *args, **kwargs):
     else:
         email_command = ''
 
-    if exists(f'/etc/letsencrypt/configs/{site_name}.conf') == False:
+    if not exists(f'/etc/letsencrypt/configs/{site_name}.conf'):
         sudo('mkdir -p /etc/letsencrypt/configs')
         put('letsencrypt-domain.template.conf', f'/home/{env.user}/{site_name}.conf')
         sudo(
