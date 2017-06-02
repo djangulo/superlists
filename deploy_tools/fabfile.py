@@ -183,25 +183,14 @@ def _letsencrypt_get_cert(site_name, user_email=None, *args, **kwargs):
         f' /etc/letsencrypt/configs/{site_name}.conf certonly'
     )
 
-def _letsencrypt_configure_nginx(site_name):
-    sudo(
-        f'mkdir -p /etc/ssl/certs/'
-        ' && openssl dhparam -out /etc/ssl/certs/dhparam.pem 2048'
-        ' && echo "ssl_certificate /etc/letsencrypt/live/{site_name}/fullchain.pem;"'
-        ' | tee /etc/nginx/snippets/ssl-{site_name}.conf'
-        ' && echo "ssl_certificate_key /etc/letsencrypt/live/{site_name}/privkey.pem;"'
-        ' | tee -a /etc/nginx/snippets/ssl-{site_name}.conf'
-    )
-    put('ssl-params.conf', '/home/{env.user}/ssl-params.conf')
-    sudo(
-        'mv /home/{env.user}/ssl-params.conf /etc/nginx/snippets/ssl-params.conf'
-        """ && sed '/server_name/a \
-            return 301 https://$server_name$request_uri;\n'"""
-        ' /etc/nginx/sites-available/{site_name}.nginx.conf'
-    )
+def _letsencrypt_cron_renew(site_name):
+    run(f'mkdir -p /home/{env.user}/.local/bin')
+    put('renew-letsencrypt.sh', f'/home/{env.user}/.local/bin/renew-letsencrypt.sh')
+    run('sed -i s/SITENAME/{site_name}/g /home/{env.user}/.local/bin/renew-letsencrypt.sh')
+    sudo('mkdir -p /var/log/letsencrypt')
+    run(f'echo "0 0 1 JAN,MAR,MAY,JUL,SEP,NOV * /home/{env.user}/.local/bin/renew-letsencrypt.sh" | tee -a | crontab ')
 
-# sed '/server_name/a \
-#     return 301 https://$server_name$request_uri;' /etc/nginx/sites-available/merkablue.com.nginx.conf | sudo tee /etc/nginx/sites-available/merkablue.com.nginx.conf
+
 
 # Need to automate:
 #  - lock down ssh
