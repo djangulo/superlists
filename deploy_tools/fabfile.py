@@ -70,51 +70,47 @@ def _update_database(source_folder):
         ' && ../virtualenv/bin/python manage.py migrate --noinput'
     )
 
-def _prepare_basic_nginx_file():
-    pass
-
-def _configure_nginx(site_name, setup_media=False, setup_static=False,
-    ssl_redirect=False):
+def _configure_nginx(
+    site_name, is_default_server=False, setup_media=False, setup_static=False,
+    ssl_redirect=False, client_max_body_size=10):
+    default_server = ' default_server;' if is_default_server else ';'
     if not exists(f'/etc/nginx/sites-available/{site_name}.nginx.conf'):
-        put('nginx.template.conf', f'/home/{env.user}/{site_name}.nginx.conf')
-        sudo(
-            f'mv /home/{env.user}/{site_name}.nginx.conf'
-            f' /etc/nginx/sites-available/{site_name}.nginx.conf'
-            f' && sed -i s/SITENAME/{site_name}/g'
-            f' /etc/nginx/sites-available/{site_name}.nginx.conf'
-            f' && sed -i s/USERNAME/{env.user}/g'
-            f' /etc/nginx/sites-available/{site_name}.nginx.conf'
-            f' && ln -s /etc/nginx/sites-available/{site_name}.nginx.conf'
-            ' /etc/nginx/sites-enabled/'
-            ' && nginx -t && nginx -s reload'
-        )
+        put('gunicorn-nginx.template.conf', f'/home/{env.user}/{site_name}.nginx.conf')
+        sudo(f'mv /home/{env.user}/{site_name}.nginx.conf'
+            f' /etc/nginx/sites-available/{site_name}.nginx.conf')
+        sudo(f'sed -i s/SITENAME/{site_name}/g'
+            f' /etc/nginx/sites-available/{site_name}.nginx.conf')
+        sudo(f'sed -i s/USERNAME/{env.user}/g'
+            f' /etc/nginx/sites-available/{site_name}.nginx.conf')
+        sudo(f'ln -s /etc/nginx/sites-available/{site_name}.nginx.conf'
+            ' /etc/nginx/sites-enabled/')
+        sudo('nginx -t && nginx -s reload')
+    if is_default_server:
+        sudo(f"sed -i 's/listen 80;/listen 80{default_server}/g'"
+            f' /etc/nginx/sites-available/{site_name}.nginx.conf')
+        sudo(f"sed -i 's/listen [::]:80;/listen [::]:80{default_server}/g'"
+            f' /etc/nginx/sites-available/{site_name}.nginx.conf')
     if ssl_redirect:
-        sudo(
-            'mv /home/{env.user}/ssl-params.conf /etc/nginx/snippets/ssl-params.conf'
-            "&& sed "
-            f"'/charset utf-8/i\    return 301 https://$server_name$request_uri;\n'"
-            ' /etc/nginx/sites-available/{site_name}.nginx.conf'
-        )
-        else:
-            put('nginx.template.conf', '/home/{env.user}/{site_name}.nginx.conf')
-            sudo(
-                f'mv /home/{env.user}/nginx.template.conf'
-                ' /etc/nginx/sites-available/{site_name}.nginx.conf'
-                ' && sed s/SITENAME/{site_name}/g'
-                ' /etc/nginx/sites-available/{site_name}.nginx.conf'
-                ' | tee /etc/nginx/sites-available/{site_name}.nginx.conf'
-                ' && sed s/USERNAME/{env.user}/g'
-                ' /etc/nginx/sites-available/{site_name}.nginx.conf'
-                ' | tee /etc/nginx/sites-available/{site_name}.nginx.conf'
-                " && sed 's:#--LETSENCRYPT_PLACEHOLDER--#:"
-                "    location /.well-known/acme-challenge {\n"
-                "        root /var/www/letsencrypt;\n"
-                "    }:g' /etc/nginx/sites-available/{site_name}.nginx.conf"
-                ' | tee /etc/nginx/sites-available/{site_name}.nginx.conf'
-                ' && ln -s /etc/nginx/sites-available/{site_name}.nginx.conf'
-                ' /etc/nginx/sites-enabled/'
-                ' && nginx -t && nginx -s reload'
-            )
+        ssl_snippet = f"""server{{
+    listen 443 ssl http2{default_server}
+    listen [::]:443 ssl http2{default_server}
+    include snippets/ssl-{site_name}.conf;
+    include snippets/ssl-params.conf;
+
+"""
+        put('ssl-params.conf', f'/home/{env.user}/ssl-params.conf')
+        sudo(f'mv /home/{env.user}/ssl-params.conf'
+            ' /etc/nginx/snippets/ssl-params.conf')
+        sudo("sed -i"
+            " '/charset utf-8/i\    return 301 https://$server_name$request_uri;\n'"
+            f' /etc/nginx/sites-available/{site_name}.nginx.conf')
+        sudo("sed -i '/charset utf-8/a\}'"
+            f' /etc/nginx/sites-available/{site_name}.nginx.conf')
+        sudo(f"sed -i '/location \/static/i\{ssl_snippet}"
+            f' /etc/nginx/sites-available/{site_name}.nginx.conf')
+    if client_max_body_size != 10:
+        sudo('sed -i '
+            f"'s/client_max_body_size=10M/client_max_body_size={client_max_body_size}M/g'")
 
 def _letsencrypt_get_cert(site_name, user_email=None, *args, **kwargs):
     if not exists('/opt/letsencrypt'):
@@ -156,7 +152,7 @@ def _letsencrypt_get_cert(site_name, user_email=None, *args, **kwargs):
             ' && nginx -t && nginx -s reload'
         )
     else:
-        put('nginx.template.conf', f'/home/{env.user}/{site_name}.nginx.conf')
+        put('gunicorn-nginx.template.conf', f'/home/{env.user}/{site_name}.nginx.conf')
         sudo(
             f'mv /home/{env.user}/{site_name}.nginx.conf'
             f' /etc/nginx/sites-available/{site_name}.nginx.conf'
