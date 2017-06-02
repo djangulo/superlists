@@ -4,6 +4,8 @@ import random
 
 REPO_URL = 'https://github.com/djangulo/superlists.git'
 
+env['sudo_user'] = 'djangulo'
+
 def deploy():
     site_folder = f'/home/{env.user}/sites/{env.host}'
     source_folder = site_folder + '/source'
@@ -71,25 +73,25 @@ def _update_database(source_folder):
     )
 
 def _configure_nginx(
-    site_name, is_default_server=False, setup_media=False, setup_static=False,
-    ssl_redirect=False, client_max_body_size=10):
+    site_name, is_default_server=False, setup_media=False,
+    setup_static=False, ssl_redirect=False, client_max=10):
     default_server = ' default_server;' if is_default_server else ';'
-    if not exists(f'/etc/nginx/sites-available/{site_name}.nginx.conf'):
+    nginx_av = f'/etc/nginx/sites-available/{site_name}.nginx.conf'
+    nginx_en = f'/etc/nginx/sites-enabled/{site_name}.nginx.conf'
+    if not exists(nginx_av):
         put('gunicorn-nginx.template.conf', f'/home/{env.user}/{site_name}.nginx.conf')
         sudo(f'mv /home/{env.user}/{site_name}.nginx.conf'
-            f' /etc/nginx/sites-available/{site_name}.nginx.conf')
+            f' {nginx_av}')
         sudo(f'sed -i s/SITENAME/{site_name}/g'
-            f' /etc/nginx/sites-available/{site_name}.nginx.conf')
+            f' {nginx_av}')
         sudo(f'sed -i s/USERNAME/{env.user}/g'
-            f' /etc/nginx/sites-available/{site_name}.nginx.conf')
-        sudo(f'ln -s /etc/nginx/sites-available/{site_name}.nginx.conf'
-            ' /etc/nginx/sites-enabled/')
-        sudo('nginx -t && nginx -s reload')
+            f' {nginx_av}')
+        
     if is_default_server:
         sudo(f"sed -i 's/listen 80;/listen 80{default_server}/g'"
-            f' /etc/nginx/sites-available/{site_name}.nginx.conf')
+            f' {nginx_av}')
         sudo(f"sed -i 's/listen [::]:80;/listen [::]:80{default_server}/g'"
-            f' /etc/nginx/sites-available/{site_name}.nginx.conf')
+            f' {nginx_av}')
     if ssl_redirect:
         ssl_snippet = f"""server{{
     listen 443 ssl http2{default_server}
@@ -103,55 +105,58 @@ def _configure_nginx(
             ' /etc/nginx/snippets/ssl-params.conf')
         sudo("sed -i"
             " '/charset utf-8/i\    return 301 https://$server_name$request_uri;\n'"
-            f' /etc/nginx/sites-available/{site_name}.nginx.conf')
+            f' {nginx_av}')
         sudo("sed -i '/charset utf-8/a\}'"
-            f' /etc/nginx/sites-available/{site_name}.nginx.conf')
-        sudo(f"sed -i '/location \/static/i\{ssl_snippet}"
-            f' /etc/nginx/sites-available/{site_name}.nginx.conf')
-    if client_max_body_size != 10:
+            f' {nginx_av}')
+        sudo(f"sed -i '/client_max_body_size/i\{ssl_snippet}"
+            f' {nginx_av}')
+    if client_max != 10:
         sudo('sed -i '
-            f"'s/client_max_body_size=10M/client_max_body_size={client_max_body_size}M/g'")
+            f"'s/client_max_body_size 10M;/client_max_body_size {client_max}M;/g'")
+    if setup_media:
+        media_snippet = f"""
+    location /media {{
+        alias /home/{env.user}/sites/{site_name}/media;
+    }}
+"""
+        sudo(f"sed -i '/client_max_body_size/i\{media_snippet}'"
+            f' {nginx_av}')
+    if not exists(f'{nginx_en}'):
+        sudo(f'ln -s {nginx_av} /etc/nginx/sites-enabled/')
+    sudo('nginx -t && nginx -s reload')
 
 def _letsencrypt_get_cert(site_name, user_email=None, *args, **kwargs):
+    nginx = f'/etc/nginx/sites-available/{site_name}.nginx.conf'
+    letsencrypt = f'/etc/letsencrypt/configs/{site_name}.conf'
     if not exists('/opt/letsencrypt'):
         sudo('git clone https://github.com/certbot/certbot /opt/letsencrypt')
     else:
-        sudo(
-            'cd /opt/letsencrypt'
-            ' && git pull origin master'
-        )
-    sudo(
-        ' mkdir -p /var/www/letsencrypt'
-        ' && chgrp www-data /var/www/letsencrypt'
-        )
+        sudo('cd /opt/letsencrypt && git pull origin master')
+    sudo('mkdir -p /var/www/letsencrypt'
+        ' && chgrp www-data /var/www/letsencrypt')
     if user_email is not None:
-        email_command = f' && sed s/USEREMAIL/{user_email}/g'
+        email_command = f' && sed -i s/USEREMAIL/{user_email}/g'
         email_command += f' /etc/letsencrypt/configs/{site_name}.conf'
-        email_command += f' | tee /etc/letsencrypt/configs/{site_name}.conf'
     else:
         email_command = ''
 
-    if not exists(f'/etc/letsencrypt/configs/{site_name}.conf'):
+    if not exists(f'{letsencrypt}'):
         sudo('mkdir -p /etc/letsencrypt/configs')
         put('letsencrypt-domain.template.conf', f'/home/{env.user}/{site_name}.conf')
+        sudo(f'mv /home/{env.user}/{site_name}.conf {letsencrypt}')
+        sudo('sed -i s/SITENAME/{site_name}/g'
+            ' {letsencrypt}' + email_command)
+    if exists(f'{nginx}'):
         sudo(
-            f'mv /home/{env.user}/{site_name}.conf'
-            ' /etc/letsencrypt/configs/{site_name}.conf'
-            ' && sed s/SITENAME/{site_name}/g'
-            ' /etc/letsencrypt/configs/{site_name}.conf'
-            ' | tee /etc/letsencrypt/configs/{site_name}.conf' + email_command
-        )
-    if exists(f'/etc/nginx/sites-available/{site_name}.nginx.conf'):
-        sudo(
-            f'sed s/#--LETSENCRYPT_PLACEHOLDER--#/'
+            f'sed -i s/#--LETSENCRYPT_PLACEHOLDER--#/'
             '    location /.well-known/acme-challenge {\n'
             '        root /var/www/letsencrypt;\n'
             '    }/g'
-            f' /etc/nginx/sites-available/{site_name}.nginx.conf'
-            f' | tee /etc/nginx/sites-available/{site_name}.nginx.conf'
+            f' {nginx}'
             ' && nginx -t && nginx -s reload'
         )
     else:
+        _configure_nginx(site_name=site_name)
         put('gunicorn-nginx.template.conf', f'/home/{env.user}/{site_name}.nginx.conf')
         sudo(
             f'mv /home/{env.user}/{site_name}.nginx.conf'
