@@ -1,10 +1,16 @@
-from fabric.contrib.files import append, exists, sed
-from fabric.api import env, local, run, sudo, put
+import os
 import random
+from fabric.api import env, local, run, sudo, put, settings
+from fabric.contrib.files import append, exists, sed
 
 REPO_URL = 'https://github.com/djangulo/superlists.git'
-
-env['sudo_user'] = 'djangulo'
+# env['sudo_user'] = 'djangulo'
+project_name = env['project_name']
+default = env.get('default', False)
+media = env.get('media', False)
+ssl = env.get('ssl', False)
+static = env.get('static', False)
+c_max = env.get('client_max', 10)
 
 def deploy():
     site_folder = f'/home/{env.user}/sites/{env.host}'
@@ -12,13 +18,24 @@ def deploy():
     _install_necessary_packages()
     _create_directory_structure_if_necessary(site_folder)
     _get_latest_source(source_folder)
-    _update_settings(source_folder, env.host)
+    _update_settings(source_folder, env.host, setup_media=media)
     _update_virtualenv(source_folder)
     _update_static_files(source_folder)
     _update_database(source_folder)
+    _configure_nginx(site_name,  is_default_server=default, setup_media=media,
+                    setup_static=static, ssl_redirect=ssl, client_max=c_max)
 
 def get_ssl_cert():
     _letsencrypt_get_cert(env.host, 'denis.angulo@linekode.com')
+
+def configure_nginx():
+    site_folder = f'/home/{env.user}/sites/{env.host}'
+    source_folder = site_folder + '/source'
+    with settings(warn_only=True):
+        grep_check = run(f'grep MEDIA_URL {source_folder}/{project_name}/settings.py')
+    print(grep_check.failed)
+    #_configure_nginx(env.host)
+
 
 def _install_necessary_packages():
     sudo(
@@ -39,20 +56,31 @@ def _get_latest_source(source_folder):
     current_commit = local("git log -n 1 --format=%H", capture=True)
     run(f'cd {source_folder} && git reset --hard {current_commit}')
 
-def _update_settings(source_folder, site_name):
-    settings_path = source_folder + '/superlists/settings.py'
+def _update_settings(source_folder, site_name, setup_media=False):
+    settings_path = f'{source_folder}/{project_name}/settings.py'
     sed(settings_path, "DEBUG = True", "DEBUG = False")
     sed(
         settings_path,
         'ALLOWED_HOSTS = .+$',
         f'ALLOWED_HOSTS = ["{site_name}"]'
     )
-    secret_key_file = source_folder + '/superlists/secret_key.py'
+    secret_key_file = f'{source_folder}/{project_name}/secret_key.py'
     if not exists(secret_key_file):
         chars = 'abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*(-_=+)'
         key = ''.join(random.SystemRandom().choice(chars) for _ in range(50))
         append(secret_key_file, f'SECRET_KEY = "{key}"')
     append(settings_path, '\nfrom .secret_key import SECRET_KEY')
+    if setup_media:
+        with settings(warn_only=True):
+            root_check = run(f'grep MEDIA_ROOT {source_folder}/{project_name}/settings.py')
+            if root_check.failed:
+                run("""echo "\nMEDIA_ROOT = os.path.abspath(os.path.join(BASE_DIR, '../media'))" """
+                    f'| tee -a {source_folder}/{project_name}/settings.py')
+            url_check = run(f'grep MEDIA_URL {source_folder}/{project_name}/settings.py')
+            if url_check.failed:
+                run("""echo "\nMEDIA_URL = '/media/'" """
+                    f'| tee -a {source_folder}/{project_name}/settings.py')
+
 
 def _update_virtualenv(source_folder):
     virtualenv_folder = source_folder + '/../virtualenv'
@@ -128,6 +156,11 @@ def _configure_nginx(
 def _letsencrypt_get_cert(site_name, user_email=None, *args, **kwargs):
     nginx = f'/etc/nginx/sites-available/{site_name}.nginx.conf'
     letsencrypt = f'/etc/letsencrypt/configs/{site_name}.conf'
+    nginx_snippet = """
+    location /.well-known/acme-challenge {{
+        root /var/www/letsencrypt;
+    }}        
+"""
     if not exists('/opt/letsencrypt'):
         sudo('git clone https://github.com/certbot/certbot /opt/letsencrypt')
     else:
@@ -147,46 +180,26 @@ def _letsencrypt_get_cert(site_name, user_email=None, *args, **kwargs):
         sudo('sed -i s/SITENAME/{site_name}/g'
             ' {letsencrypt}' + email_command)
     if exists(f'{nginx}'):
-        sudo(
-            f'sed -i s/#--LETSENCRYPT_PLACEHOLDER--#/'
-            '    location /.well-known/acme-challenge {\n'
-            '        root /var/www/letsencrypt;\n'
-            '    }/g'
-            f' {nginx}'
-            ' && nginx -t && nginx -s reload'
-        )
+        sudo(f"sed -i 's/#--LETSENCRYPT_PLACEHOLDER--#/{nginx_snippet}/g'"
+            f' {nginx}')
+        sudo(' nginx -t && nginx -s reload')
     else:
         _configure_nginx(site_name=site_name)
-        put('gunicorn-nginx.template.conf', f'/home/{env.user}/{site_name}.nginx.conf')
-        sudo(
-            f'mv /home/{env.user}/{site_name}.nginx.conf'
-            f' /etc/nginx/sites-available/{site_name}.nginx.conf'
-            f' && sed s/SITENAME/{site_name}/g'
-            f' /etc/nginx/sites-available/{site_name}.nginx.conf'
-            f' | tee /etc/nginx/sites-available/{site_name}.nginx.conf'
-            f' && sed s/USERNAME/{env.user}/g'
-            f' /etc/nginx/sites-available/{site_name}.nginx.conf'
-            f' | tee /etc/nginx/sites-available/{site_name}.nginx.conf'
-            " && sed 's:#--LETSENCRYPT_PLACEHOLDER--#:"
-            "    location /.well-known/acme-challenge {\n"
-            "        root /var/www/letsencrypt;\n"
-            "    }:g'"
-            f' /etc/nginx/sites-available/{site_name}.nginx.conf'
-            f' | tee /etc/nginx/sites-available/{site_name}.nginx.conf'
-            f' && ln -s /etc/nginx/sites-available/{site_name}.nginx.conf'
-            ' /etc/nginx/sites-enabled/'
-            ' && nginx -t && nginx -s reload'
-        )
+        sudo(f"sed -i 's/#--LETSENCRYPT_PLACEHOLDER--#/{nginx_snippet}/g'"
+            f' {nginx}')
+        sudo(' nginx -t && nginx -s reload')
     run(
         f'cd /opt/letsencrypt'
         ' && ./certbot-auto --non-interactive --config'
         f' /etc/letsencrypt/configs/{site_name}.conf certonly'
     )
+    _letsencrypt_cron_renew(site_name=site_name)
+
 
 def _letsencrypt_cron_renew(site_name):
     run(f'mkdir -p /home/{env.user}/.local/bin')
     put('renew-letsencrypt.sh', f'/home/{env.user}/.local/bin/renew-letsencrypt.sh')
-    run('sed -i s/SITENAME/{site_name}/g /home/{env.user}/.local/bin/renew-letsencrypt.sh')
+    run("sed -i 's/SITENAME/{site_name}/g' /home/{env.user}/.local/bin/renew-letsencrypt.sh")
     sudo('mkdir -p /var/log/letsencrypt')
     run(f'echo "0 0 1 JAN,MAR,MAY,JUL,SEP,NOV * /home/{env.user}/.local/bin/renew-letsencrypt.sh" | tee -a | crontab ')
 
