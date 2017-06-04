@@ -6,12 +6,13 @@ STAGING_SITE=superlists-staging.djangulo.com
 PROJECT_NAME='superlists'
 DEFAULT=False
 MEDIA=False
-SSL=False
+SSL=True
 STATIC=False
 CLIENT_MAX=10
 
 fab --set project_name=$PROJECT_NAME,default=$DEFAULT,media=$MEDIA,\
-ssl=$SSL,static=$STATIC,c_max=$CLIENT_MAX deploy:host=$USER@$STAGING_SITE\ --port $PORT
+ssl=$SSL,static=$STATIC,c_max=$CLIENT_MAX \
+deploy:host=$USER@$STAGING_SITE --port $PORT
 
 # project_name = env['project_name']
 # default = env.get('default', False)

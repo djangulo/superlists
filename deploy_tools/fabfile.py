@@ -5,7 +5,8 @@ from fabric.contrib.files import append, exists, sed
 
 REPO_URL = 'https://github.com/djangulo/superlists.git'
 # env['sudo_user'] = 'djangulo'
-project_name = env['project_name']
+env.password = env.get('sudo_password')
+project_name = env.get('project_name', None)
 default = env.get('default', False)
 media = env.get('media', False)
 ssl = env.get('ssl', False)
@@ -22,7 +23,14 @@ def deploy():
     _update_virtualenv(source_folder)
     _update_static_files(source_folder)
     _update_database(source_folder)
-    _configure_nginx(site_name,  is_default_server=default, setup_media=media,
+    _install_gunicorn_systemd_service(env.host)
+    _configure_nginx(env.host,  is_default_server=default, setup_media=media,
+                    setup_static=static, ssl_redirect=ssl, client_max=c_max)
+    if ssl == 'True':
+        _letsencrypt_get_cert(env.host, user_email='denis.angulo@linekode.com')
+
+def co_deploy():
+    _configure_nginx(env.host,  is_default_server=default, setup_media=media,
                     setup_static=static, ssl_redirect=ssl, client_max=c_max)
 
 def get_ssl_cert():
@@ -81,6 +89,19 @@ def _update_settings(source_folder, site_name, setup_media=False):
                 run("""echo "\nMEDIA_URL = '/media/'" """
                     f'| tee -a {source_folder}/{project_name}/settings.py')
 
+def _install_gunicorn_systemd_service(site_name):
+    if not exists(f'/etc/systemd/system/gunicorn-{site_name}.service'):
+        put('gunicorn-systemd.template.service',
+            f'/home/{env.user}/gunicorn-{site_name}.service')
+        sed(f'/home/{env.user}/gunicorn-{site_name}.service',
+            'SITENAME', f'{site_name}')
+        sed(f'/home/{env.user}/gunicorn-{site_name}.service',
+            'USERNAME', f'{env.user}')
+        sudo(f'mv /home/{env.user}/gunicorn-{site_name}.service'
+            f' /etc/systemd/system/gunicorn-{site_name}.service')
+    sudo('systemctl daemon-reload')
+    sudo(f'systemctl enable gunicorn-{site_name}')
+    sudo(f'systemctl start gunicorn-{site_name}')
 
 def _update_virtualenv(source_folder):
     virtualenv_folder = source_folder + '/../virtualenv'
@@ -101,9 +122,9 @@ def _update_database(source_folder):
     )
 
 def _configure_nginx(
-    site_name, is_default_server=False, setup_media=False,
-    setup_static=False, ssl_redirect=False, client_max=10):
-    default_server = ' default_server;' if is_default_server else ';'
+    site_name, is_default_server=False, setup_le=False,
+    setup_media=False, setup_static=False, ssl_redirect=False, client_max=10):
+    default_server = ' default_server;' if is_default_server == 'True' else ';'
     nginx_av = f'/etc/nginx/sites-available/{site_name}.nginx.conf'
     nginx_en = f'/etc/nginx/sites-enabled/{site_name}.nginx.conf'
     if not exists(nginx_av):
@@ -115,52 +136,80 @@ def _configure_nginx(
         sudo(f'sed -i s/USERNAME/{env.user}/g'
             f' {nginx_av}')
         
-    if is_default_server:
+    if is_default_server == 'True':
         sudo(f"sed -i 's/listen 80;/listen 80{default_server}/g'"
             f' {nginx_av}')
         sudo(f"sed -i 's/listen [::]:80;/listen [::]:80{default_server}/g'"
             f' {nginx_av}')
-    if ssl_redirect:
-        ssl_snippet = f"""server{{
-    listen 443 ssl http2{default_server}
-    listen [::]:443 ssl http2{default_server}
-    include snippets/ssl-{site_name}.conf;
-    include snippets/ssl-params.conf;
+    if ssl_redirect == 'True':
+        if not exists(f'/etc/nginx/snippets/ssl-{site_name}.conf'):
+            put('ssl-template.conf', f'/home/{env.user}/ssl-{site_name}.conf')
+            sed(
+                f'/home/{env.user}/ssl-{site_name}.conf',
+                'SITENAME',
+                f'{site_name}'
+            )
+            sudo(f'mv /home/{env.user}/ssl-{site_name}.conf'
+                f' /etc/nginx/snippets/ssl-{site_name}.conf')
+        if not exists(f'/etc/nginx/snippets/ssl-params.conf'):
+            put('ssl-params.conf', f'/home/{env.user}/ssl-params.conf')
+            sudo(f'mv /home/{env.user}/ssl-params.conf'
+                ' /etc/nginx/snippets/ssl-params.conf')
+        if not exists('/etc/ssl/certs/dhparam.pem'):
+            sudo('openssl dhparam -out /etc/ssl/certs/dhparam.pem 4096')
+        with settings(warn_only=True):
+            ssl_check = run(f"grep 'listen 443' {nginx_av}").failed
+        if ssl_check:
+            sudo("sed -i"
+                " '/charset utf-8/i\    return 301 https://$server_name$request_uri;\n'"
+                f' {nginx_av}')
+            sudo("sed -i '/charset utf-8/a\}'"
+                f' {nginx_av}')
+            sudo(f"sed -i '/client_max_body_size/i\server{{'"
+                f' {nginx_av}')
+            sudo(f"sed -i '/client_max_body_size/i\    listen 443 ssl http2{default_server}'"
+                f' {nginx_av}')
+            sudo(f"sed -i '/client_max_body_size/i\    listen [::]:443 ssl http2{default_server}'"
+                f' {nginx_av}')
+            sudo(f"sed -i '/client_max_body_size/i\    {site_name}'"
+                f' {nginx_av}')
+            sudo(f"sed -i '/client_max_body_size/i\    include snippets\/ssl-{site_name}.conf;'"
+                f' {nginx_av}')
+            sudo(f"sed -i '/client_max_body_size/i\    include snippets\/ssl-params.conf;'"
+                f' {nginx_av}')
 
-"""
-        put('ssl-params.conf', f'/home/{env.user}/ssl-params.conf')
-        sudo(f'mv /home/{env.user}/ssl-params.conf'
-            ' /etc/nginx/snippets/ssl-params.conf')
-        sudo("sed -i"
-            " '/charset utf-8/i\    return 301 https://$server_name$request_uri;\n'"
-            f' {nginx_av}')
-        sudo("sed -i '/charset utf-8/a\}'"
-            f' {nginx_av}')
-        sudo(f"sed -i '/client_max_body_size/i\{ssl_snippet}"
-            f' {nginx_av}')
+
+        with settings(warn_only=True):
+            le_check = run(f"grep 'location /.well-known' {nginx_av}").failed
+        if le_check:
+            nginx_snippet = r"""location /.well-known/acme-challenge {\
+        root /var/www/letsencrypt;\
+    }"""
+            sudo(f"sed -i 's_#--LETSENCRYPT-PLACEHOLDER--#_{nginx_snippet}_g'"
+                f' {nginx_av}')
+
     if client_max != 10:
         sudo('sed -i '
             f"'s/client_max_body_size 10M;/client_max_body_size {client_max}M;/g'")
-    if setup_media:
-        media_snippet = f"""
+
+    if setup_media == 'True':
+        with settings(warn_only=True):
+            media_check = run(f"grep 'location /media' {nginx_av}")
+            if media_check.failed:
+                media_snippet = f"""
     location /media {{
         alias /home/{env.user}/sites/{site_name}/media;
     }}
 """
-        sudo(f"sed -i '/client_max_body_size/i\{media_snippet}'"
-            f' {nginx_av}')
+                sudo(f"sed -i '/client_max_body_size/i\{media_snippet}'"
+                    f' {nginx_av}')
     if not exists(f'{nginx_en}'):
         sudo(f'ln -s {nginx_av} /etc/nginx/sites-enabled/')
     sudo('nginx -t && nginx -s reload')
 
-def _letsencrypt_get_cert(site_name, user_email=None, *args, **kwargs):
+def _letsencrypt_get_cert(site_name, user_email=None):
     nginx = f'/etc/nginx/sites-available/{site_name}.nginx.conf'
     letsencrypt = f'/etc/letsencrypt/configs/{site_name}.conf'
-    nginx_snippet = """
-    location /.well-known/acme-challenge {{
-        root /var/www/letsencrypt;
-    }}        
-"""
     if not exists('/opt/letsencrypt'):
         sudo('git clone https://github.com/certbot/certbot /opt/letsencrypt')
     else:
@@ -177,17 +226,8 @@ def _letsencrypt_get_cert(site_name, user_email=None, *args, **kwargs):
         sudo('mkdir -p /etc/letsencrypt/configs')
         put('letsencrypt-domain.template.conf', f'/home/{env.user}/{site_name}.conf')
         sudo(f'mv /home/{env.user}/{site_name}.conf {letsencrypt}')
-        sudo('sed -i s/SITENAME/{site_name}/g'
-            ' {letsencrypt}' + email_command)
-    if exists(f'{nginx}'):
-        sudo(f"sed -i 's/#--LETSENCRYPT_PLACEHOLDER--#/{nginx_snippet}/g'"
-            f' {nginx}')
-        sudo(' nginx -t && nginx -s reload')
-    else:
-        _configure_nginx(site_name=site_name)
-        sudo(f"sed -i 's/#--LETSENCRYPT_PLACEHOLDER--#/{nginx_snippet}/g'"
-            f' {nginx}')
-        sudo(' nginx -t && nginx -s reload')
+        sudo(f'sed -i s/SITENAME/{site_name}/g'
+            f' {letsencrypt}' + email_command)
     run(
         f'cd /opt/letsencrypt'
         ' && ./certbot-auto --non-interactive --config'
@@ -195,11 +235,13 @@ def _letsencrypt_get_cert(site_name, user_email=None, *args, **kwargs):
     )
     _letsencrypt_cron_renew(site_name=site_name)
 
+def set_cron():
+    _letsencrypt_cron_renew(env.host)
 
 def _letsencrypt_cron_renew(site_name):
     run(f'mkdir -p /home/{env.user}/.local/bin')
     put('renew-letsencrypt.sh', f'/home/{env.user}/.local/bin/renew-letsencrypt.sh')
-    run("sed -i 's/SITENAME/{site_name}/g' /home/{env.user}/.local/bin/renew-letsencrypt.sh")
+    run(f"sed -i 's/SITENAME/{site_name}/g' /home/{env.user}/.local/bin/renew-letsencrypt.sh")
     sudo('mkdir -p /var/log/letsencrypt')
     run(f'echo "0 0 1 JAN,MAR,MAY,JUL,SEP,NOV * /home/{env.user}/.local/bin/renew-letsencrypt.sh" | tee -a | crontab ')
 
