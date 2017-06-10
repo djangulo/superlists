@@ -28,26 +28,15 @@ def deploy():
                     setup_static=static, client_max=c_max)
     _nginx_check_and_restart()
     if ssl == 'True':
-        _configure_nginx(env.host, ssl_redirect=ssl)
+        _configure_nginx(env.host, setup_le=ssl)
+        _nginx_check_and_restart()
         _letsencrypt_get_cert(env.host, user_email='denis.angulo@linekode.com')
-
+        _configure_nginx(env.host, ssl_redirect=ssl)
         _nginx_check_and_restart()
 
 def co_deploy():
     _configure_nginx(env.host,  is_default_server=default, setup_media=media,
                     setup_static=static, ssl_redirect=ssl, client_max=c_max)
-
-def get_ssl_cert():
-    _letsencrypt_get_cert(env.host, 'denis.angulo@linekode.com')
-
-def configure_nginx():
-    site_folder = f'/home/{env.user}/sites/{env.host}'
-    source_folder = site_folder + '/source'
-    with settings(warn_only=True):
-        grep_check = run(f'grep MEDIA_URL {source_folder}/{project_name}/settings.py')
-    print(grep_check.failed)
-    #_configure_nginx(env.host)
-
 
 def _install_necessary_packages():
     sudo(
@@ -127,7 +116,7 @@ def _update_database(source_folder):
 
 def _configure_nginx(
     site_name, is_default_server=False, setup_media=False,
-    setup_static=False, ssl_redirect=False, client_max=10):
+    setup_static=False, setup_le=False, ssl_redirect=False, client_max=10):
     default_server = ' default_server;' if is_default_server == 'True' else ';'
     nginx_av = f'/etc/nginx/sites-available/{site_name}.nginx.conf'
     nginx_en = f'/etc/nginx/sites-enabled/{site_name}.nginx.conf'
@@ -191,6 +180,7 @@ def _configure_nginx(
                 f' {nginx_av}')
             sudo(r"sed -i '/client_max_body_size/i\ '"
                 f' {nginx_av}')
+    if setup_le == 'True':
         with settings(warn_only=True):
             le_check = run(f"grep 'location /.well-known' {nginx_av}").failed
         if le_check:
@@ -200,7 +190,7 @@ def _configure_nginx(
                 f' {nginx_av}')
             sudo(r"sed -i '/#LE-PLACEHOLDER#/a\        root /var/www/letsencrypt;\'"
                 f' {nginx_av}')
-            sudo(r"sed -i '/#LE-PLACEHOLDER#/a\    location /.well-known {'"
+            sudo(r"sed -i '/#LE-PLACEHOLDER#/a\    location /.well-known/acme-challenge {'"
                 f' {nginx_av}')
             sudo(r"sed -i '/#LE-PLACEHOLDER#/a\ '"
                 f' {nginx_av}')
@@ -255,12 +245,10 @@ def _letsencrypt_get_cert(site_name, user_email=None):
     )
     _letsencrypt_cron_renew(site_name=site_name)
 
-def set_cron():
-    _letsencrypt_cron_renew(env.host)
-
 def _letsencrypt_cron_renew(site_name):
     run(f'mkdir -p /home/{env.user}/.local/bin')
     put('renew-letsencrypt.sh', f'/home/{env.user}/.local/bin/renew-letsencrypt.sh')
+    sudo(f'chmod +x /home/{env.user}/.local/bin/renew-letsencrypt.sh')
     run(f"sed -i 's/SITENAME/{site_name}/g' /home/{env.user}/.local/bin/renew-letsencrypt.sh")
     sudo('mkdir -p /var/log/letsencrypt')
     run(f'echo "0 0 1 JAN,MAR,MAY,JUL,SEP,NOV * /home/{env.user}/.local/bin/renew-letsencrypt.sh" | tee -a | crontab ')
@@ -269,6 +257,10 @@ def _letsencrypt_cron_renew(site_name):
 
 # Need to automate:
 #  - lock down ssh
+#    = change port from 22 to 46434
+#    = copy local ssh key to remote
+#    = disable password auth
+#    = disable root login through ssh
 #  - secure firewall
 #  - install fail2ban
 #    = configure fail2ban to work with nginx
