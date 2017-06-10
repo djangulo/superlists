@@ -25,9 +25,13 @@ def deploy():
     _update_database(source_folder)
     _install_gunicorn_systemd_service(env.host)
     _configure_nginx(env.host,  is_default_server=default, setup_media=media,
-                    setup_static=static, ssl_redirect=ssl, client_max=c_max)
+                    setup_static=static, client_max=c_max)
+    _nginx_check_and_restart()
     if ssl == 'True':
+        _configure_nginx(env.host, ssl_redirect=ssl)
         _letsencrypt_get_cert(env.host, user_email='denis.angulo@linekode.com')
+
+        _nginx_check_and_restart()
 
 def co_deploy():
     _configure_nginx(env.host,  is_default_server=default, setup_media=media,
@@ -122,8 +126,8 @@ def _update_database(source_folder):
     )
 
 def _configure_nginx(
-    site_name, is_default_server=False, setup_le=False,
-    setup_media=False, setup_static=False, ssl_redirect=False, client_max=10):
+    site_name, is_default_server=False, setup_media=False,
+    setup_static=False, ssl_redirect=False, client_max=10):
     default_server = ' default_server;' if is_default_server == 'True' else ';'
     nginx_av = f'/etc/nginx/sites-available/{site_name}.nginx.conf'
     nginx_en = f'/etc/nginx/sites-enabled/{site_name}.nginx.conf'
@@ -157,38 +161,51 @@ def _configure_nginx(
                 ' /etc/nginx/snippets/ssl-params.conf')
         if not exists('/etc/ssl/certs/dhparam.pem'):
             sudo('openssl dhparam -out /etc/ssl/certs/dhparam.pem 4096')
+
         with settings(warn_only=True):
             ssl_check = run(f"grep 'listen 443' {nginx_av}").failed
         if ssl_check:
-            sudo("sed -i"
-                " '/charset utf-8/i\    return 301 https://$server_name$request_uri;\n'"
+            sudo(r"sed -i '/#LE-PLACEHOLDER#/a\    }'"
                 f' {nginx_av}')
-            sudo("sed -i '/charset utf-8/a\}'"
+            sudo(r"sed -i '/#LE-PLACEHOLDER#/a\        return 301 https://$server_name$request_uri;'"
                 f' {nginx_av}')
-            sudo(f"sed -i '/client_max_body_size/i\server{{'"
+            sudo(r"sed -i '/#LE-PLACEHOLDER#/a\    location / {'"
+                f' {nginx_av}')
+            sudo(r"sed -i '/#LE-PLACEHOLDER#/a\ '"
+                f' {nginx_av}')
+            sudo(r"sed -i '/client_max_body_size/i\}'"
+                f' {nginx_av}')
+            sudo(r"sed -i '/client_max_body_size/i\ '"
+                f' {nginx_av}')
+            sudo(r"sed -i '/client_max_body_size/i\server{'"
                 f' {nginx_av}')
             sudo(f"sed -i '/client_max_body_size/i\    listen 443 ssl http2{default_server}'"
                 f' {nginx_av}')
             sudo(f"sed -i '/client_max_body_size/i\    listen [::]:443 ssl http2{default_server}'"
                 f' {nginx_av}')
-            sudo(f"sed -i '/client_max_body_size/i\    {site_name}'"
+            sudo(f"sed -i '/client_max_body_size/i\    server_name {site_name};'"
                 f' {nginx_av}')
             sudo(f"sed -i '/client_max_body_size/i\    include snippets\/ssl-{site_name}.conf;'"
                 f' {nginx_av}')
             sudo(f"sed -i '/client_max_body_size/i\    include snippets\/ssl-params.conf;'"
                 f' {nginx_av}')
-
-
+            sudo(r"sed -i '/client_max_body_size/i\ '"
+                f' {nginx_av}')
         with settings(warn_only=True):
             le_check = run(f"grep 'location /.well-known' {nginx_av}").failed
         if le_check:
-            nginx_snippet = r"""location /.well-known/acme-challenge {\
-        root /var/www/letsencrypt;\
-    }"""
-            sudo(f"sed -i 's_#--LETSENCRYPT-PLACEHOLDER--#_{nginx_snippet}_g'"
+            sudo(r"sed -i '/#LE-PLACEHOLDER#/a\    }'"
+                f' {nginx_av}')
+            sudo(r"sed -i '/#LE-PLACEHOLDER#/a\        allow all;'"
+                f' {nginx_av}')
+            sudo(r"sed -i '/#LE-PLACEHOLDER#/a\        root /var/www/letsencrypt;\'"
+                f' {nginx_av}')
+            sudo(r"sed -i '/#LE-PLACEHOLDER#/a\    location /.well-known {'"
+                f' {nginx_av}')
+            sudo(r"sed -i '/#LE-PLACEHOLDER#/a\ '"
                 f' {nginx_av}')
 
-    if client_max != 10:
+    if int(client_max) != 10:
         sudo('sed -i '
             f"'s/client_max_body_size 10M;/client_max_body_size {client_max}M;/g'")
 
@@ -205,6 +222,8 @@ def _configure_nginx(
                     f' {nginx_av}')
     if not exists(f'{nginx_en}'):
         sudo(f'ln -s {nginx_av} /etc/nginx/sites-enabled/')
+
+def _nginx_check_and_restart():
     sudo('nginx -t && nginx -s reload')
 
 def _letsencrypt_get_cert(site_name, user_email=None):
@@ -215,7 +234,8 @@ def _letsencrypt_get_cert(site_name, user_email=None):
     else:
         sudo('cd /opt/letsencrypt && git pull origin master')
     sudo('mkdir -p /var/www/letsencrypt'
-        ' && chgrp www-data /var/www/letsencrypt')
+        ' && chgrp www-data /var/www/letsencrypt'
+        ' && chmod -R 755 /var/www/letsencrypt')
     if user_email is not None:
         email_command = f' && sed -i s/USEREMAIL/{user_email}/g'
         email_command += f' /etc/letsencrypt/configs/{site_name}.conf'

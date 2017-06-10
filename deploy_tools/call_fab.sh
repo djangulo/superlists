@@ -2,7 +2,7 @@
 
 PORT=43464
 
-STAGING_SITE=superlists-staging.djangulo.com
+STAGING_SITE=superlists.djangulo.com
 PROJECT_NAME='superlists'
 DEFAULT=False
 MEDIA=False
@@ -20,3 +20,4 @@ deploy:host=$USER@$STAGING_SITE --port $PORT
 # ssl = env.get('ssl', False)
 # static = env.get('static', False)
 # c_max = env.get('client_max', 10)
+
