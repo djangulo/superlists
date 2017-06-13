@@ -1,13 +1,11 @@
 import os
 import sys
 
-from unittest import skip
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 from selenium import webdriver
 from selenium.webdriver.firefox.firefox_binary import FirefoxBinary
 
 MAX_WAIT = 5
-
 
 class FunctionalTest(StaticLiveServerTestCase):
 
@@ -23,11 +21,14 @@ class FunctionalTest(StaticLiveServerTestCase):
 
     def launch_browser_instance(self):
         if 'win' in sys.platform:
-            binary = FirefoxBinary(r'C:\Users\da00440056.USER\Documents\firefox-de\firefox.exe')
+            binary = FirefoxBinary(r'C:\Users\da00440056.USER\Documents\firefox\firefox.exe')
             self.browser = webdriver.Firefox(firefox_binary=binary)
         else:
             self.browser = webdriver.Firefox()
-    
+        staging_server = os.environ.get('STAGING_SERVER')
+        if staging_server:
+            self.live_server_url = 'http://' + staging_server
+
     def wait_for_row_in_list_table(self, row_text):
         start_time = time.time()
         while True:
