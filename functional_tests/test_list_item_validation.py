@@ -74,6 +74,7 @@ class ItemValidationTest(FunctionalTest):
         self.get_item_input_box().send_keys('Banter too thick')
         self.get_item_input_box().send_keys(Keys.ENTER)
 
+
         self.wait_for(lambda: self.assertTrue(
             self.get_error_element().is_displayed()
         ))

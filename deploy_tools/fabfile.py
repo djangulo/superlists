@@ -95,6 +95,7 @@ def _install_gunicorn_systemd_service(site_name):
     sudo('systemctl daemon-reload')
     sudo(f'systemctl enable gunicorn-{site_name}')
     sudo(f'systemctl start gunicorn-{site_name}')
+    sudo(f'systemctl restart gunicorn-{site_name}')
 
 def _update_virtualenv(source_folder):
     virtualenv_folder = source_folder + '/../virtualenv'
